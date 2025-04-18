@@ -1,3 +1,4 @@
+# tests/test_cli_diff.py
 
 import subprocess
 import sys
@@ -28,4 +29,3 @@ def test_diff_on_sample_epub(tmp_path):
     assert "Coverage:" in out
     assert "Tier:" in out
     assert "Unknown lemmas (top 3):" in out
-

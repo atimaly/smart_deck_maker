@@ -15,9 +15,15 @@ spacy = "^3.8.5"
 requests = "^2.32.3"
 stanza = "^1.6.0"        # ← add this line
 genanki = "^0.13.1"
+pyqt6 = "^6.9.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.1"
+pytest-qt = "^4.4.0"
+
+[tool.poetry.scripts]
+smartdeck = "smartdeck.cli:app"
+smartdeck-gui = "smartdeck.gui:main"
 
 [build-system]
 requires = ["poetry-core"]
