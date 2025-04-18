@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "smart_deck_maker"
+version = "0.0.0"
+description = "Skeleton for Smart Deck Maker"
+authors = ["Your Name <you@example.com>"]
+license = "MIT"
+packages = [{ include = "smartdeck" }]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.13"
+ebooklib = "^0.18"
+beautifulsoup4 = "^4.13.4"
+pdfminer-six = "^20250416"
+spacy = "^3.8.5"
+requests = "^2.32.3"
+stanza = "^1.6.0"        # ← add this line
+genanki = "^0.13.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
