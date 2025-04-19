@@ -85,10 +85,13 @@ class MainWindow(QWidget):
         self.resize(600, 400)
 
         self.tabs = QTabWidget()
-        self.diff_tab = self._make_diff_tab()
+        self.diff_tab  = self._make_diff_tab()
         self.build_tab = self._make_build_tab()
-        self.tabs.addTab(self.diff_tab, "Difficulty")
+        self.sync_tab  = self._make_sync_tab()
+
+        self.tabs.addTab(self.diff_tab,  "Difficulty")
         self.tabs.addTab(self.build_tab, "Build Deck")
+        self.tabs.addTab(self.sync_tab,  "Sync Vault")
 
         layout = QVBoxLayout()
         layout.addWidget(self.tabs)
@@ -98,7 +101,6 @@ class MainWindow(QWidget):
         w = QWidget()
         layout = QVBoxLayout()
 
-        # File picker
         hfile = QHBoxLayout()
         hfile.addWidget(QLabel("Book:"))
         self.diff_file = QLineEdit()
@@ -108,17 +110,15 @@ class MainWindow(QWidget):
         hfile.addWidget(btn_file)
         layout.addLayout(hfile)
 
-        # Options: pages, top N, lang
         opts = QHBoxLayout()
         self.diff_pages = QLineEdit(); self.diff_pages.setPlaceholderText("Pagespec e.g. 1-3,5")
-        self.diff_top = QSpinBox(); self.diff_top.setRange(1, 1000); self.diff_top.setValue(20)
-        self.diff_lang = QComboBox(); self.diff_lang.addItems(["en", "de"]);
-        opts.addWidget(QLabel("Pages:")); opts.addWidget(self.diff_pages)
-        opts.addWidget(QLabel("Top N:")); opts.addWidget(self.diff_top)
-        opts.addWidget(QLabel("Lang:")); opts.addWidget(self.diff_lang)
+        self.diff_top   = QSpinBox(); self.diff_top.setRange(1,1000); self.diff_top.setValue(20)
+        self.diff_lang  = QComboBox(); self.diff_lang.addItems(["en","de"])
+        opts.addWidget(QLabel("Pages:"));   opts.addWidget(self.diff_pages)
+        opts.addWidget(QLabel("Top N:"));   opts.addWidget(self.diff_top)
+        opts.addWidget(QLabel("Lang:"));    opts.addWidget(self.diff_lang)
         layout.addLayout(opts)
 
-        # Run & output
         run_btn = QPushButton("Compute Difficulty")
         run_btn.clicked.connect(self.on_diff)
         layout.addWidget(run_btn)
@@ -132,7 +132,6 @@ class MainWindow(QWidget):
         w = QWidget()
         layout = QVBoxLayout()
 
-        # File picker
         hfile = QHBoxLayout()
         hfile.addWidget(QLabel("Book:"))
         self.build_file = QLineEdit()
@@ -142,19 +141,17 @@ class MainWindow(QWidget):
         hfile.addWidget(btn_file)
         layout.addLayout(hfile)
 
-        # Build options
         opts = QHBoxLayout()
-        self.build_pages = QLineEdit(); self.build_pages.setPlaceholderText("Pagespec")
-        self.build_virtual = QSpinBox(); self.build_virtual.setRange(0, 5000)
-        self.build_top = QSpinBox(); self.build_top.setRange(1, 1000); self.build_top.setValue(100)
-        self.build_lang = QComboBox(); self.build_lang.addItems(["en", "de"]);
-        opts.addWidget(QLabel("Pages:")); opts.addWidget(self.build_pages)
-        opts.addWidget(QLabel("Virtual words:")); opts.addWidget(self.build_virtual)
-        opts.addWidget(QLabel("Top N:")); opts.addWidget(self.build_top)
-        opts.addWidget(QLabel("Lang:")); opts.addWidget(self.build_lang)
+        self.build_pages   = QLineEdit(); self.build_pages.setPlaceholderText("Pagespec")
+        self.build_virtual = QSpinBox(); self.build_virtual.setRange(0,5000)
+        self.build_top     = QSpinBox(); self.build_top.setRange(1,1000); self.build_top.setValue(100)
+        self.build_lang    = QComboBox(); self.build_lang.addItems(["en","de"])
+        opts.addWidget(QLabel("Pages:"));        opts.addWidget(self.build_pages)
+        opts.addWidget(QLabel("Virtual words:"));opts.addWidget(self.build_virtual)
+        opts.addWidget(QLabel("Top N:"));        opts.addWidget(self.build_top)
+        opts.addWidget(QLabel("Lang:"));         opts.addWidget(self.build_lang)
         layout.addLayout(opts)
 
-        # Output file
         hout = QHBoxLayout()
         hout.addWidget(QLabel("Output .apkg:"))
         self.build_out = QLineEdit("deck.apkg")
@@ -164,11 +161,39 @@ class MainWindow(QWidget):
         hout.addWidget(btn_out)
         layout.addLayout(hout)
 
-        # Progress & run
         self.build_progress = QProgressBar()
         layout.addWidget(self.build_progress)
+
         run_btn = QPushButton("Build Deck")
         run_btn.clicked.connect(self.on_build)
+        layout.addWidget(run_btn)
+
+        w.setLayout(layout)
+        return w
+
+    def _make_sync_tab(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout()
+
+        # Kind selector
+        kind_h = QHBoxLayout()
+        kind_h.addWidget(QLabel("Kind:"))
+        self.sync_kind = QComboBox()
+        self.sync_kind.addItems(["apkg","live","book"])
+        kind_h.addWidget(self.sync_kind)
+        layout.addLayout(kind_h)
+
+        # Identifier input
+        id_h = QHBoxLayout()
+        id_h.addWidget(QLabel("Identifier:"))
+        self.sync_ident = QLineEdit()
+        self.sync_ident.setPlaceholderText("Path or deck name")
+        id_h.addWidget(self.sync_ident)
+        layout.addLayout(id_h)
+
+        # Remove button
+        run_btn = QPushButton("Remove Source")
+        run_btn.clicked.connect(self.on_remove)
         layout.addWidget(run_btn)
 
         w.setLayout(layout)
@@ -184,7 +209,6 @@ class MainWindow(QWidget):
             line.setText(path)
 
     def on_diff(self):
-        print("DEBUG vault path:", Vault().db_path)
         self.diff_out.clear()
         self.worker = Worker(
             Path(self.diff_file.text()),
@@ -214,6 +238,17 @@ class MainWindow(QWidget):
         self.worker.error.connect(lambda msg: QMessageBox.critical(self, "Error", msg))
         self.worker.start()
 
+    def on_remove(self):
+        kind  = self.sync_kind.currentText()
+        ident = self.sync_ident.text().strip()
+        if not ident:
+            QMessageBox.warning(self, "Input required", "Please enter a path or deck name.")
+            return
+        try:
+            Vault().remove_source(kind, ident)
+            QMessageBox.information(self, "Removed", f"Removed {kind} '{ident}' from vault.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
 
 def main():
     app = QApplication(sys.argv)
@@ -221,6 +256,6 @@ def main():
     win.show()
     sys.exit(app.exec())
 
-
 if __name__ == "__main__":
     main()
+
