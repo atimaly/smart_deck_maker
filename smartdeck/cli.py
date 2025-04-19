@@ -48,15 +48,28 @@ def sync_add(
 
 @sync_app.command("remove")
 def sync_remove(
-    kind: str = typer.Argument(..., help="apkg or live"),
-    ident: str = typer.Argument(..., help="Path to .apkg or deck name"),
+    kind: str = typer.Argument(..., help="apkg, live, or book"),
+    ident: str = typer.Argument(..., help="Path to .apkg, deck name, or book path"),
 ):
+    """
+    Remove a deck’s words from your vault (and delete orphaned words).
+    Supports kinds: 'apkg', 'live', and 'book'.
+    """
     vault = Vault()
     if kind == "apkg":
+        # offline .apkg imports are registered under kind="deck"
         vault.remove_source("deck", ident)
     elif kind == "live":
+        # live‑sync stub registers both a live and a deck source
         vault.remove_source("live", ident)
         vault.remove_source("deck", ident)
+    elif kind == "book":
+        # GUI‑built decks use kind="book"
+        vault.remove_source("book", ident)
+    else:
+        typer.echo("Error: kind must be 'apkg', 'live', or 'book'", err=True)
+        raise typer.Exit(code=1)
+
     typer.echo(f"Removed {kind} '{ident}' and any orphaned words.")
 
 
