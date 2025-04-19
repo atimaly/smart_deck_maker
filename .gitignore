@@ -1,0 +1,57 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Poetry
+# (You generally commit poetry.lock, so omit it here unless you want to ignore it)
+# poetry.lock
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+
+# Pyenv
+.python-version
+
+# IDEs and editors
+.vscode/
+.idea/
+*.iml
+
+# Jupyter
+.ipynb_checkpoints/
+
+# pytest
+.pytest_cache/
+
+# Coverage reports
+.coverage
+htmlcov/
+.coverage.*
+
+# MyPy, Pyright, other caches
+.mypy_cache/
+.pyright/
+
+# Logs and databases
+*.log
+.smartdeck/known.db
+
+# OS files
+.DS_Store
+Thumbs.db
+

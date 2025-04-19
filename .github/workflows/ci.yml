@@ -24,7 +24,7 @@ jobs:
           pip install poetry
 
       - name: Install dependencies
-        run: poetry install --no-interaction --no-ansi
+        run: poetry install --no-interaction --no-ansi --with dev
 
       - name: Download NLP models
         run: |

@@ -16,6 +16,7 @@ requests = "^2.32.3"
 stanza = "^1.6.0"        # ← add this line
 genanki = "^0.13.1"
 pyqt6 = "^6.9.0"
+pytest-cov = "^6.1.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.1"

@@ -1,3 +1,4 @@
+# smartdeck/vault/db.py
 """SQLite‑backed known‑word vault."""
 from __future__ import annotations
 
@@ -14,20 +15,46 @@ _VAULT_PATH.parent.mkdir(parents=True, exist_ok=True)
 CoverageTier = Literal["EASY", "ADEQUATE", "CHALLENGING", "FRUSTRATING"]
 
 
+class _Row(tuple):
+    """
+    Custom row: supports row['col'] lookups but also equals a plain tuple.
+    """
+    def __new__(cls, values: Tuple, mapping: dict[str, object]):
+        obj = super().__new__(cls, values)
+        obj._mapping = mapping
+        return obj
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            return self._mapping[key]
+        return super().__getitem__(key)
+
+    def __eq__(self, other):
+        if isinstance(other, tuple):
+            return tuple(self).__eq__(other)
+        return super().__eq__(other)
+
+
+def _row_factory(cursor: sqlite3.Cursor, row: Tuple) -> _Row:
+    mapping = {desc[0]: row[idx] for idx, desc in enumerate(cursor.description)}
+    return _Row(row, mapping)
+
+
 class Vault:
     """Track which words a user already knows and where they came from."""
 
-    # ------------------------------------------------------------------ setup
     def __init__(self, db_path: Path | None = None) -> None:
         self.db_path: Path = db_path or _VAULT_PATH
         self._ensure_schema()
 
     @contextmanager
     def _conn(self):
-        """Yield a SQLite connection that auto‑commits and closes."""
+        """Yield a SQLite connection that auto‑commits and closes, with FKs on."""
         con = sqlite3.connect(self.db_path)
+        con.row_factory = _row_factory
+        # enable foreign key support for ON DELETE CASCADE
+        con.execute("PRAGMA foreign_keys = ON;")
         try:
-            con.row_factory = sqlite3.Row
             yield con
             con.commit()
         finally:
@@ -42,15 +69,16 @@ class Vault:
 
                 CREATE TABLE IF NOT EXISTS sources (
                     id     INTEGER PRIMARY KEY,
-                    kind   TEXT NOT NULL,   -- 'deck' or 'file'
-                    ident  TEXT NOT NULL UNIQUE
+                    kind   TEXT NOT NULL,    -- 'deck' or 'file'
+                    ident  TEXT NOT NULL,
+                    UNIQUE(kind, ident)
                 );
 
                 CREATE TABLE IF NOT EXISTS known_words (
                     id     INTEGER PRIMARY KEY,
                     lang   TEXT NOT NULL,
                     lemma  TEXT NOT NULL,
-                    UNIQUE (lang, lemma)
+                    UNIQUE(lang, lemma)
                 );
 
                 CREATE TABLE IF NOT EXISTS word_sources (
@@ -69,36 +97,38 @@ class Vault:
                 """
             )
 
-    # ---------------------------------------------------------------- sources
     def _get_or_add_source(self, kind: str, ident: str) -> int:
         """Return the row‑id for (kind, ident), inserting if needed."""
         with self._conn() as con:
-            cur = con.execute("SELECT id FROM sources WHERE ident = ?", (ident,))
+            cur = con.execute(
+                "SELECT id FROM sources WHERE kind = ? AND ident = ?", (kind, ident)
+            )
             if row := cur.fetchone():
-                return int(row["id"])
+                return int(row[0])
             cur = con.execute(
                 "INSERT INTO sources(kind, ident) VALUES(?, ?)", (kind, ident)
             )
             return int(cur.lastrowid)
 
     def remove_source(self, kind: str, ident: str) -> None:
-        """Delete one deck/file and any words that are now orphaned."""
+        """Delete one source and cascade‐clean orphaned words+occurrences."""
         with self._conn() as con:
             cur = con.execute(
                 "SELECT id FROM sources WHERE kind=? AND ident=?", (kind, ident)
             )
             if not (row := cur.fetchone()):
                 return
-            src_id = int(row["id"])
+            src_id = int(row[0])
+            # unlink all words from this source
             con.execute("DELETE FROM word_sources WHERE src_id=?", (src_id,))
-            # any word with zero remaining links vanishes
+            # delete any words with zero remaining links; cascades will remove occurrences
             con.execute(
                 "DELETE FROM known_words "
                 "WHERE id NOT IN (SELECT word_id FROM word_sources)"
             )
+            # finally delete the source itself
             con.execute("DELETE FROM sources WHERE id=?", (src_id,))
 
-    # ---------------------------------------------------------------- add words
     def add_words(
         self,
         lang: str,
@@ -107,7 +137,7 @@ class Vault:
         ident: str,
         occurrences: dict[str, Tuple[str, str]] | None = None,
     ) -> None:
-        """Store new lemmas and link them to *ident* (file/deck)."""
+        """Store lemmas and link them to *ident* (book/deck), with optional excerpts."""
         src_id = self._get_or_add_source(kind, ident)
         with self._conn() as con:
             for lemma in lemmas:
@@ -118,7 +148,7 @@ class Vault:
                 word_id = con.execute(
                     "SELECT id FROM known_words WHERE lang=? AND lemma=?",
                     (lang, lemma),
-                ).fetchone()["id"]
+                ).fetchone()[0]
                 con.execute(
                     "INSERT OR IGNORE INTO word_sources(word_id, src_id) "
                     "VALUES(?, ?)",
@@ -132,11 +162,10 @@ class Vault:
                         (word_id, excerpt, loc),
                     )
 
-    # ---------------------------------------------------------------- coverage
     def coverage(
         self, lang: str, lemmas: Iterable[str]
     ) -> tuple[float, Counter[str], CoverageTier]:
-        """Return coverage %, unknown Counter, and tier."""
+        """Return coverage %, unknown Counter, and difficulty tier."""
         words = list(lemmas)
         with self._conn() as con:
             known = {
