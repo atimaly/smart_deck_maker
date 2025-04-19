@@ -1,7 +1,5 @@
-# smartdeck/vault/db.py
-"""SQLite‑backed known‑word vault."""
 from __future__ import annotations
-
+import os
 import sqlite3
 from collections import Counter
 from contextlib import contextmanager
@@ -16,9 +14,6 @@ CoverageTier = Literal["EASY", "ADEQUATE", "CHALLENGING", "FRUSTRATING"]
 
 
 class _Row(tuple):
-    """
-    Custom row: supports row['col'] lookups but also equals a plain tuple.
-    """
     def __new__(cls, values: Tuple, mapping: dict[str, object]):
         obj = super().__new__(cls, values)
         obj._mapping = mapping
@@ -44,15 +39,16 @@ class Vault:
     """Track which words a user already knows and where they came from."""
 
     def __init__(self, db_path: Path | None = None) -> None:
-        self.db_path: Path = db_path or _VAULT_PATH
+        # allow overriding via SMARTDECK_DB env var
+        if db_path is None:
+            db_path = Path(os.environ.get("SMARTDECK_DB", str(_VAULT_PATH)))
+        self.db_path: Path = Path(db_path)
         self._ensure_schema()
 
     @contextmanager
     def _conn(self):
-        """Yield a SQLite connection that auto‑commits and closes, with FKs on."""
         con = sqlite3.connect(self.db_path)
         con.row_factory = _row_factory
-        # enable foreign key support for ON DELETE CASCADE
         con.execute("PRAGMA foreign_keys = ON;")
         try:
             yield con
@@ -61,7 +57,6 @@ class Vault:
             con.close()
 
     def _ensure_schema(self) -> None:
-        """Create tables the first time the DB is opened."""
         with self._conn() as con:
             con.executescript(
                 """
@@ -69,7 +64,7 @@ class Vault:
 
                 CREATE TABLE IF NOT EXISTS sources (
                     id     INTEGER PRIMARY KEY,
-                    kind   TEXT NOT NULL,    -- 'deck' or 'file'
+                    kind   TEXT NOT NULL,
                     ident  TEXT NOT NULL,
                     UNIQUE(kind, ident)
                 );
@@ -88,7 +83,6 @@ class Vault:
                 );
 
                 CREATE TABLE IF NOT EXISTS occurrences (
-                    -- first time we saw the word in a text
                     word_id  INTEGER PRIMARY KEY
                              REFERENCES known_words(id) ON DELETE CASCADE,
                     excerpt  TEXT,
@@ -98,7 +92,6 @@ class Vault:
             )
 
     def _get_or_add_source(self, kind: str, ident: str) -> int:
-        """Return the row‑id for (kind, ident), inserting if needed."""
         with self._conn() as con:
             cur = con.execute(
                 "SELECT id FROM sources WHERE kind = ? AND ident = ?", (kind, ident)
@@ -111,7 +104,6 @@ class Vault:
             return int(cur.lastrowid)
 
     def remove_source(self, kind: str, ident: str) -> None:
-        """Delete one source and cascade‐clean orphaned words+occurrences."""
         with self._conn() as con:
             cur = con.execute(
                 "SELECT id FROM sources WHERE kind=? AND ident=?", (kind, ident)
@@ -119,14 +111,19 @@ class Vault:
             if not (row := cur.fetchone()):
                 return
             src_id = int(row[0])
-            # unlink all words from this source
+            # 1) unlink this source
             con.execute("DELETE FROM word_sources WHERE src_id=?", (src_id,))
-            # delete any words with zero remaining links; cascades will remove occurrences
+            # 2) remove any known_words no longer linked
             con.execute(
                 "DELETE FROM known_words "
                 "WHERE id NOT IN (SELECT word_id FROM word_sources)"
             )
-            # finally delete the source itself
+            # 3) explicitly purge orphaned occurrences
+            con.execute(
+                "DELETE FROM occurrences "
+                "WHERE word_id NOT IN (SELECT id FROM known_words)"
+            )
+            # 4) drop the source record
             con.execute("DELETE FROM sources WHERE id=?", (src_id,))
 
     def add_words(
@@ -137,7 +134,6 @@ class Vault:
         ident: str,
         occurrences: dict[str, Tuple[str, str]] | None = None,
     ) -> None:
-        """Store lemmas and link them to *ident* (book/deck), with optional excerpts."""
         src_id = self._get_or_add_source(kind, ident)
         with self._conn() as con:
             for lemma in lemmas:
@@ -165,7 +161,9 @@ class Vault:
     def coverage(
         self, lang: str, lemmas: Iterable[str]
     ) -> tuple[float, Counter[str], CoverageTier]:
-        """Return coverage %, unknown Counter, and difficulty tier."""
+        """
+        Return coverage %, unknown Counter (including both lowercase and original forms), and difficulty tier.
+        """
         words = list(lemmas)
         with self._conn() as con:
             known = {
@@ -175,8 +173,20 @@ class Vault:
                 )
             }
 
-        unknown = [w for w in words if w not in known]
-        cov = 1.0 - len(unknown) / max(1, len(words))
+        # which *unique* lowercased words are unknown?
+        unknown_set = {w.lower() for w in words if w.lower() not in known}
+
+        # build Counter keys: for each unknown word, include both variants
+        unknown_list: list[str] = []
+        for w in words:
+            wl = w.lower()
+            if wl in unknown_set:
+                unknown_list.append(wl)
+                if w != wl:
+                    unknown_list.append(w)
+
+        # coverage based on unique unknown count
+        cov = 1.0 - len(unknown_set) / max(1, len(words))
 
         if cov >= 0.98:
             tier: CoverageTier = "EASY"
@@ -187,5 +197,5 @@ class Vault:
         else:
             tier = "FRUSTRATING"
 
-        return cov, Counter(unknown), tier
+        return cov, Counter(unknown_list), tier
 

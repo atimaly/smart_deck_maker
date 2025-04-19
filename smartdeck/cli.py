@@ -1,9 +1,7 @@
-# smartdeck/cli.py
-
 from __future__ import annotations
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 import typer
 from typer import Context
@@ -16,15 +14,10 @@ from smartdeck.vault.db import Vault
 from smartdeck.deck.excerpt import capture_excerpts
 from smartdeck.deck.builder import build_deck
 
-# real imports for sync
 from smartdeck.ingest.apkg import ingest_apkg
 from smartdeck.ingest.live import ingest_live
 
 app = typer.Typer(help="SmartDeck Maker CLI")
-
-# ----------------------------------------------------------------------
-# sync sub‑app
-# ----------------------------------------------------------------------
 sync_app = typer.Typer(help="Synchronize Anki decks ↔ known‑word vault")
 app.add_typer(sync_app, name="sync")
 
@@ -34,11 +27,8 @@ def sync_add(
     kind: str = typer.Argument(..., help="apkg or live"),
     ident: str = typer.Argument(..., help="Path to .apkg or deck name"),
     lang: str = typer.Option("en", "--lang", "-l", help="Language code"),
-    top: Optional[int] = typer.Option(None, "--top", "-t", help="Max unknowns to ingest (apkg only)"),
+    top: Optional[int] = typer.Option(None, "--top", "-t", help="Max unknowns to ingest"),
 ):
-    """
-    Add words from an offline .apkg or live Anki deck into your vault.
-    """
     vault = Vault()
     if kind == "apkg":
         path = Path(ident)
@@ -48,6 +38,7 @@ def sync_add(
         ingest_apkg(path, lang=lang, vault=vault, top=top)
         typer.echo(f"Imported {path.name} into vault.")
     elif kind == "live":
+        vault._get_or_add_source("live", ident)
         ingest_live(ident, lang=lang, vault=vault)
         typer.echo(f"Imported live deck '{ident}' into vault.")
     else:
@@ -60,28 +51,23 @@ def sync_remove(
     kind: str = typer.Argument(..., help="apkg or live"),
     ident: str = typer.Argument(..., help="Path to .apkg or deck name"),
 ):
-    """
-    Remove a deck’s words from your vault (and delete orphaned words).
-    """
-    if kind not in ("apkg", "live"):
-        typer.echo("Error: kind must be 'apkg' or 'live'", err=True)
-        raise typer.Exit(code=1)
     vault = Vault()
-    vault.remove_source(kind, ident)
+    if kind == "apkg":
+        vault.remove_source("deck", ident)
+    elif kind == "live":
+        vault.remove_source("live", ident)
+        vault.remove_source("deck", ident)
     typer.echo(f"Removed {kind} '{ident}' and any orphaned words.")
 
 
 @app.command("diff")
 def diff_cmd(
     source: Path = typer.Argument(..., help="EPUB or PDF file to analyze"),
-    pages: Optional[str] = typer.Option(None, "--pages", "-p", help="Pagespec, e.g. 1-3,5"),
-    virtual_pages: Optional[int] = typer.Option(None, "--virtual-pages", "-v", help="Split every N words"),
-    top: int = typer.Option(20, "--top", "-t", help="Num top unknowns to show"),
-    lang: str = typer.Option("en", "--lang", "-l", help="Language code"),
+    pages: Optional[str] = typer.Option(None, "--pages", "-p"),
+    virtual_pages: Optional[int] = typer.Option(None, "--virtual-pages", "-v"),
+    top: int = typer.Option(20, "--top", "-t"),
+    lang: str = typer.Option("en", "--lang", "-l"),
 ):
-    """
-    Show lexical coverage tier & top‑N unknown words for a book.
-    """
     texts = (
         extract_epub(source, pages, virtual_pages)
         if source.suffix.lower() == ".epub"
@@ -89,8 +75,7 @@ def diff_cmd(
     )
     tokens = tokenize_lemmas(texts, lang=lang)
     lemmas = [w["lemma"] for w in tokens]
-    vault = Vault()
-    pct, unknowns, tier = vault.coverage(lang, lemmas)
+    pct, unknowns, tier = Vault().coverage(lang, lemmas)
 
     typer.echo(f"Coverage: {pct:.1%}")
     typer.echo(f"Tier: {tier}")
@@ -104,13 +89,10 @@ def build_cmd(
     source: Path = typer.Argument(..., help="EPUB or PDF file to build from"),
     pages: Optional[str] = typer.Option(None, "--pages", "-p"),
     virtual_pages: Optional[int] = typer.Option(None, "--virtual-pages", "-v"),
-    top: int = typer.Option(100, "--top", "-t", help="Num top unknowns"),
-    lang: str = typer.Option("en", "--lang", "-l", help="Language code"),
-    output: Path = typer.Option(Path("deck.apkg"), "--output", "-o", help="Output .apkg file"),
+    top: int = typer.Option(100, "--top", "-t"),
+    lang: str = typer.Option("en", "--lang", "-l"),
+    output: Path = typer.Option(Path("deck.apkg"), "--output", "-o"),
 ):
-    """
-    Build an Anki deck from the top‑N unknown words in a book.
-    """
     texts = (
         extract_epub(source, pages, virtual_pages)
         if source.suffix.lower() == ".epub"
@@ -118,12 +100,11 @@ def build_cmd(
     )
     tokens = tokenize_lemmas(texts, lang=lang)
     lemmas = [w["lemma"] for w in tokens]
-    vault = Vault()
-    _, unknowns, _ = vault.coverage(lang, lemmas)
+    _, unknowns, _ = Vault().coverage(lang, lemmas)
 
     top_lemmas = [l for l, _ in unknowns.most_common(top)]
     occ = capture_excerpts(texts, top_lemmas)
-    vault.add_words(lang, top_lemmas, kind="book", ident=str(source), occurrences=occ)
+    Vault().add_words(lang, top_lemmas, kind="book", ident=str(source), occurrences=occ)
 
     entries = [(l, "", occ[l][0], occ[l][1]) for l in top_lemmas]
     build_deck(source.name, entries, str(output))
@@ -133,7 +114,7 @@ def build_cmd(
 @app.callback(invoke_without_command=True)
 def main(
     ctx: Context,
-    version: bool = typer.Option(False, "--version", help="Show version"),
+    version: bool = typer.Option(False, "--version"),
 ):
     if version:
         import pkg_resources
