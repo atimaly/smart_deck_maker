@@ -2,7 +2,18 @@
 
 import pytest
 import genanki
+import os
 from pathlib import Path
+
+
+@pytest.fixture(autouse=True, scope="session")
+def use_temp_vault(tmp_path_factory):
+    # before any tests run...
+    db = tmp_path_factory.mktemp("vault") / "known.db"
+    os.environ["SMARTDECK_DB"] = str(db)
+    yield
+    # afterwards you can inspect or just throw away db
+
 
 @pytest.fixture
 def make_test_apkg(tmp_path):
