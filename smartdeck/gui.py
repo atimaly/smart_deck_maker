@@ -70,6 +70,8 @@ class Worker(QThread):
             top_lemmas = [l for l, _ in unknowns.most_common(self.top)]
             occ = capture_excerpts(texts, top_lemmas)
             vault.add_words(self.lang, top_lemmas, kind="book", ident=str(self.source), occurrences=occ)
+            vault._get_or_add_source("deck", str(self.output))
+
             entries = [(l, "", occ[l][0], occ[l][1]) for l in top_lemmas]
             build_deck(self.source.name, entries, str(self.output))
             self.finished.emit(f"Deck written to {self.output}")
@@ -85,13 +87,13 @@ class MainWindow(QWidget):
         self.resize(600, 400)
 
         self.tabs = QTabWidget()
-        self.diff_tab  = self._make_diff_tab()
+        self.diff_tab = self._make_diff_tab()
         self.build_tab = self._make_build_tab()
-        self.sync_tab  = self._make_sync_tab()
+        self.sync_tab = self._make_sync_tab()
 
-        self.tabs.addTab(self.diff_tab,  "Difficulty")
+        self.tabs.addTab(self.diff_tab, "Difficulty")
         self.tabs.addTab(self.build_tab, "Build Deck")
-        self.tabs.addTab(self.sync_tab,  "Sync Vault")
+        self.tabs.addTab(self.sync_tab, "Sync / Remove")
 
         layout = QVBoxLayout()
         layout.addWidget(self.tabs)
@@ -112,11 +114,11 @@ class MainWindow(QWidget):
 
         opts = QHBoxLayout()
         self.diff_pages = QLineEdit(); self.diff_pages.setPlaceholderText("Pagespec e.g. 1-3,5")
-        self.diff_top   = QSpinBox(); self.diff_top.setRange(1,1000); self.diff_top.setValue(20)
-        self.diff_lang  = QComboBox(); self.diff_lang.addItems(["en","de"])
-        opts.addWidget(QLabel("Pages:"));   opts.addWidget(self.diff_pages)
-        opts.addWidget(QLabel("Top N:"));   opts.addWidget(self.diff_top)
-        opts.addWidget(QLabel("Lang:"));    opts.addWidget(self.diff_lang)
+        self.diff_top = QSpinBox(); self.diff_top.setRange(1, 1000); self.diff_top.setValue(20)
+        self.diff_lang = QComboBox(); self.diff_lang.addItems(["en", "de"])
+        opts.addWidget(QLabel("Pages:")); opts.addWidget(self.diff_pages)
+        opts.addWidget(QLabel("Top N:")); opts.addWidget(self.diff_top)
+        opts.addWidget(QLabel("Lang:")); opts.addWidget(self.diff_lang)
         layout.addLayout(opts)
 
         run_btn = QPushButton("Compute Difficulty")
@@ -142,14 +144,14 @@ class MainWindow(QWidget):
         layout.addLayout(hfile)
 
         opts = QHBoxLayout()
-        self.build_pages   = QLineEdit(); self.build_pages.setPlaceholderText("Pagespec")
-        self.build_virtual = QSpinBox(); self.build_virtual.setRange(0,5000)
-        self.build_top     = QSpinBox(); self.build_top.setRange(1,1000); self.build_top.setValue(100)
-        self.build_lang    = QComboBox(); self.build_lang.addItems(["en","de"])
-        opts.addWidget(QLabel("Pages:"));        opts.addWidget(self.build_pages)
-        opts.addWidget(QLabel("Virtual words:"));opts.addWidget(self.build_virtual)
-        opts.addWidget(QLabel("Top N:"));        opts.addWidget(self.build_top)
-        opts.addWidget(QLabel("Lang:"));         opts.addWidget(self.build_lang)
+        self.build_pages = QLineEdit(); self.build_pages.setPlaceholderText("Pagespec")
+        self.build_virtual = QSpinBox(); self.build_virtual.setRange(0, 5000)
+        self.build_top = QSpinBox(); self.build_top.setRange(1, 1000); self.build_top.setValue(100)
+        self.build_lang = QComboBox(); self.build_lang.addItems(["en", "de"])
+        opts.addWidget(QLabel("Pages:")); opts.addWidget(self.build_pages)
+        opts.addWidget(QLabel("Virtual words:")); opts.addWidget(self.build_virtual)
+        opts.addWidget(QLabel("Top N:")); opts.addWidget(self.build_top)
+        opts.addWidget(QLabel("Lang:")); opts.addWidget(self.build_lang)
         layout.addLayout(opts)
 
         hout = QHBoxLayout()
@@ -163,7 +165,6 @@ class MainWindow(QWidget):
 
         self.build_progress = QProgressBar()
         layout.addWidget(self.build_progress)
-
         run_btn = QPushButton("Build Deck")
         run_btn.clicked.connect(self.on_build)
         layout.addWidget(run_btn)
@@ -175,29 +176,42 @@ class MainWindow(QWidget):
         w = QWidget()
         layout = QVBoxLayout()
 
-        # Kind selector
-        kind_h = QHBoxLayout()
-        kind_h.addWidget(QLabel("Kind:"))
-        self.sync_kind = QComboBox()
-        self.sync_kind.addItems(["apkg","live","book"])
-        kind_h.addWidget(self.sync_kind)
-        layout.addLayout(kind_h)
+        hl = QHBoxLayout()
+        hl.addWidget(QLabel("Registered sources:"))
+        self.sync_combo = QComboBox()
+        hl.addWidget(self.sync_combo)
 
-        # Identifier input
-        id_h = QHBoxLayout()
-        id_h.addWidget(QLabel("Identifier:"))
-        self.sync_ident = QLineEdit()
-        self.sync_ident.setPlaceholderText("Path or deck name")
-        id_h.addWidget(self.sync_ident)
-        layout.addLayout(id_h)
+        btn = QPushButton("Remove Selected Source")
+        btn.clicked.connect(self.on_remove_source)
+        hl.addWidget(btn)
 
-        # Remove button
-        run_btn = QPushButton("Remove Source")
-        run_btn.clicked.connect(self.on_remove)
-        layout.addWidget(run_btn)
-
+        layout.addLayout(hl)
         w.setLayout(layout)
+
+        self._refresh_sources()
         return w
+
+    def _refresh_sources(self):
+        vault = Vault()
+        with vault._conn() as con:
+            rows = con.execute("SELECT kind, ident FROM sources").fetchall()
+
+        self.sync_combo.clear()
+        for row in rows:
+            kind = row["kind"]
+            ident = row["ident"]
+            display = f"{kind}: {ident}"
+            self.sync_combo.addItem(display, (kind, ident))
+
+    def on_remove_source(self):
+        data = self.sync_combo.currentData()
+        if not data:
+            QMessageBox.warning(self, "Remove Source", "No source selected.")
+            return
+        kind, ident = data
+        Vault().remove_source(kind, ident)
+        QMessageBox.information(self, "Remove Source", f"Removed {kind!r} '{ident}'.")
+        self._refresh_sources()
 
     def _choose_file(self, line: QLineEdit, save: bool=False, filter: str="*.*"):
         dlg = QFileDialog(self, directory=".", filter=filter)
@@ -224,6 +238,7 @@ class MainWindow(QWidget):
         self.worker.start()
 
     def on_build(self):
+        # reuse Worker for consistency
         self.worker = Worker(
             Path(self.build_file.text()),
             self.build_pages.text() or None,
@@ -233,22 +248,14 @@ class MainWindow(QWidget):
             Path(self.build_out.text()),
             "build"
         )
-        self.worker.progress.connect(self.build_progress.setValue)
-        self.worker.finished.connect(lambda msg: QMessageBox.information(self, "Done", msg))
+        self.worker.finished.connect(self._on_build_finished)
         self.worker.error.connect(lambda msg: QMessageBox.critical(self, "Error", msg))
         self.worker.start()
 
-    def on_remove(self):
-        kind  = self.sync_kind.currentText()
-        ident = self.sync_ident.text().strip()
-        if not ident:
-            QMessageBox.warning(self, "Input required", "Please enter a path or deck name.")
-            return
-        try:
-            Vault().remove_source(kind, ident)
-            QMessageBox.information(self, "Removed", f"Removed {kind} '{ident}' from vault.")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+    def _on_build_finished(self, msg: str):
+        QMessageBox.information(self, "Done", msg)
+        # now refresh the Sync tab’s list of sources
+        self._refresh_sources()
 
 def main():
     app = QApplication(sys.argv)
