@@ -184,6 +184,7 @@ class MainWindow(QWidget):
             line.setText(path)
 
     def on_diff(self):
+        print("DEBUG vault path:", Vault().db_path)
         self.diff_out.clear()
         self.worker = Worker(
             Path(self.diff_file.text()),

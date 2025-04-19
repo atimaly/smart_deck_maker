@@ -162,32 +162,51 @@ class Vault:
         self, lang: str, lemmas: Iterable[str]
     ) -> tuple[float, Counter[str], CoverageTier]:
         """
-        Return coverage %, unknown Counter (including both lowercase and original forms), and difficulty tier.
+        Return:
+          - cov: fraction of tokens already known (token coverage),
+          - unknown_counter: Counter of each unknown lemma (raw + lowercase as needed),
+          - tier: EASY/ADEQUATE/CHALLENGING/FRUSTRATING.
+
+        Coverage is 1 - (# unknown tokens / total tokens).
         """
-        words = list(lemmas)
+        # Turn inputs into a list so we can index multiple times.
+        words_raw = list(lemmas)
+        total_tokens = len(words_raw)
+
+        # Lowercase versions for DB membership checks.
+        tokens_lower = [w.lower() for w in words_raw]
+
+        # Load all known lemmas for this language.
         with self._conn() as con:
             known = {
-                r["lemma"]
-                for r in con.execute(
+                row["lemma"]
+                for row in con.execute(
                     "SELECT lemma FROM known_words WHERE lang=?", (lang,)
                 )
             }
 
-        # which *unique* lowercased words are unknown?
-        unknown_set = {w.lower() for w in words if w.lower() not in known}
+        # 1) Build a simple list of raw unknown tokens (one entry per occurrence).
+        unknown_tokens = [
+            raw
+            for raw, low in zip(words_raw, tokens_lower)
+            if low not in known
+        ]
 
-        # build Counter keys: for each unknown word, include both variants
+        # 2) Compute coverage over all tokens.
+        cov = 1.0 - len(unknown_tokens) / max(1, total_tokens)
+
+        # 3) Build the Counter: for each unknown occurrence, include raw,
+        #    and also lowercase if raw was not already lowercase.
         unknown_list: list[str] = []
-        for w in words:
-            wl = w.lower()
-            if wl in unknown_set:
-                unknown_list.append(wl)
-                if w != wl:
-                    unknown_list.append(w)
+        for raw, low in zip(words_raw, tokens_lower):
+            if low not in known:
+                unknown_list.append(raw)
+                if raw != low:
+                    unknown_list.append(low)
 
-        # coverage based on unique unknown count
-        cov = 1.0 - len(unknown_set) / max(1, len(words))
+        unknown_counter = Counter(unknown_list)
 
+        # 4) Assign a tier label.
         if cov >= 0.98:
             tier: CoverageTier = "EASY"
         elif cov >= 0.95:
@@ -197,5 +216,4 @@ class Vault:
         else:
             tier = "FRUSTRATING"
 
-        return cov, Counter(unknown_list), tier
-
+        return cov, unknown_counter, tier
