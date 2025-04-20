@@ -1,5 +1,3 @@
-# smartdeck/cli.py
-
 from __future__ import annotations
 import sys
 from pathlib import Path
@@ -7,6 +5,7 @@ from typing import Optional
 
 import typer
 import requests
+import epitran
 from typer import Context
 
 from smartdeck.utils.pagespec import parse_pagespec
@@ -27,7 +26,7 @@ app.add_typer(sync_app, name="sync")
 
 def _translate(word: str, src: str, dest: str) -> str:
     """
-    Translate a single word via the public Google Translate HTTP endpoint.
+    Translate a single word or sentence via Google Translate HTTP endpoint.
     """
     url = "https://translate.googleapis.com/translate_a/single"
     params = {
@@ -105,6 +104,7 @@ def diff_cmd(
     tokens = tokenize_lemmas(texts, lang=lang)
     lemmas = [w["lemma"] for w in tokens]
     pct, unknowns, tier = Vault().coverage(lang, lemmas)
+
     typer.echo(f"Coverage: {pct:.1%}")
     typer.echo(f"Tier: {tier}")
     typer.echo(f"\nUnknown lemmas (top {top}):")
@@ -123,7 +123,7 @@ def build_cmd(
 ):
     """
     Build an Anki deck from the top‑N unknown words in a book,
-    fetching translations on the fly (English⇄German).
+    fetching translations and IPA on the fly (English⇄German).
     """
     # 1) Extract & lemmatize
     texts = (
@@ -145,33 +145,48 @@ def build_cmd(
     # 4) Capture excerpts
     occ = capture_excerpts(texts, top_lemmas)
 
-    # 5) Fetch translations
+    # 5) Fetch word translations
     dest = "de" if lang.lower().startswith("en") else "en"
     translations = {
         lemma: _translate(lemma, src=lang, dest=dest)
         for lemma in top_lemmas
     }
 
-    # **DEBUG**: show what translations we got
-    print("DEBUG TRANSLATIONS:", translations)
+    # 6) Generate IPA via Epitran
+    iso3 = {"en": "eng", "de": "deu"}.get(lang.lower(), lang.lower())
+    epi = epitran.Epitran(f"{iso3}-Latn")
+    ipas = {lemma: epi.transliterate(lemma) for lemma in top_lemmas}
 
-    # 6) Build entries: (lemma, translation, pos, excerpt, loc)
-    entries = [
-        (
+    # 7) Translate each full excerpt sentence
+    sent_trans = {
+        lemma: _translate(occ[lemma][0], src=lang, dest=dest)
+        for lemma in top_lemmas
+    }
+
+    # 8) Build entries:
+    #    (lemma, word‑translation, ipa, pos, excerpt, sent‑translation, loc)
+    entries: list[tuple[str, ...]] = []
+    for lemma in top_lemmas:
+        entries.append((
             lemma,
             translations.get(lemma, ""),
+            ipas.get(lemma, ""),
             pos_map.get(lemma, ""),
-            *occ.get(lemma, ("", "")),
-        )
-        for lemma in top_lemmas
-    ]
+            occ[lemma][0],
+            sent_trans.get(lemma, ""),
+            occ[lemma][1],
+        ))
 
-    # **DEBUG**: show the final entries list
-    print("DEBUG ENTRIES:", entries)
-
-    # 7) Persist & write deck
-    vault.add_words(lang, top_lemmas, kind="book", ident=str(source), occurrences=occ)
+    # 9) Persist & write deck
+    vault.add_words(
+        lang,
+        top_lemmas,
+        kind="book",
+        ident=str(source),
+        occurrences=occ,
+    )
     build_deck(source.name, entries, str(output))
+
     typer.echo(f"✅ Deck written to {output}")
 
 

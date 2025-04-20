@@ -1,6 +1,4 @@
-# smartdeck/deck/builder.py
-
-from typing import Sequence, Tuple, Union
+from typing import Sequence, Union
 import genanki
 
 # static IDs—keep these the same unless you need to force a new model/deck
@@ -14,8 +12,9 @@ _MODEL = genanki.Model(
         {"name": "Word"},
         {"name": "Translation"},
         {"name": "IPA"},
-        {"name": "Grammar"},
+        {"name": "POS"},
         {"name": "Excerpt"},
+        {"name": "SentenceTranslation"},
     ],
     templates=[{
         "name": "Card 1",
@@ -28,7 +27,8 @@ _MODEL = genanki.Model(
             <hr id="answer">
             <div><strong>Translation:</strong> {{Translation}}</div>
             <div><strong>IPA:</strong> {{IPA}}</div>
-            <div><strong>POS:</strong> {{Grammar}}</div>
+            <div><strong>POS:</strong> {{POS}}</div>
+            <div><strong>Sentence Translation:</strong> {{SentenceTranslation}}</div>
         """,
     }],
     css="""
@@ -38,9 +38,14 @@ _MODEL = genanki.Model(
     """,
 )
 
+# An entry may be:
+#  - 7‑tuple: (lemma, translation, ipa, pos, excerpt, sent_trans, loc)
+#  - 5‑tuple: (lemma, translation, pos, excerpt, loc)
+#  - 4‑tuple: (lemma, pos, excerpt, loc)
 Entry = Union[
-    Tuple[str, str, str, str, str],  # (lemma, translation, pos, excerpt, loc)
-    Tuple[str, str, str, str],       # (lemma, pos, excerpt, loc)
+    tuple[str, str, str, str, str, str, str],
+    tuple[str, str, str, str, str],
+    tuple[str, str, str, str],
 ]
 
 def build_deck(
@@ -49,20 +54,24 @@ def build_deck(
     output_file: str,
 ) -> None:
     """
-    entries: list of either
+    entries:
+      - (lemma, translation, ipa, pos, excerpt, sent_trans, location), or
       - (lemma, translation, pos, excerpt, location), or
-      - (lemma, pos, excerpt, location)  # translation will be empty
-    Writes an Anki .apkg to output_file.
+      - (lemma, pos, excerpt, location)
     """
     deck = genanki.Deck(deck_id=_DECK_ID, name=deck_name)
     for entry in entries:
-        if len(entry) == 5:
+        L = len(entry)
+        if L == 7:
+            lemma, translation, ipa, pos, excerpt, sent_trans, loc = entry
+        elif L == 5:
             lemma, translation, pos, excerpt, loc = entry
-        elif len(entry) == 4:
+            ipa = sent_trans = ""
+        elif L == 4:
             lemma, pos, excerpt, loc = entry
-            translation = ""
+            translation = ipa = sent_trans = ""
         else:
-            raise ValueError(f"Expected 4 or 5 elements per entry, got {len(entry)}")
+            raise ValueError(f"Expected 4,5 or 7 elements, got {L}")
 
         # highlight lemma in excerpt
         highlighted = excerpt.replace(
@@ -75,9 +84,10 @@ def build_deck(
             fields=[
                 lemma,
                 translation,
-                "",        # IPA left blank or filled in elsewhere
+                ipa,
                 pos,
                 field_excerpt,
+                sent_trans,
             ],
         )
         deck.add_note(note)
