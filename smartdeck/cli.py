@@ -1,9 +1,12 @@
+# smartdeck/cli.py
+
 from __future__ import annotations
 import sys
 from pathlib import Path
 from typing import Optional
 
 import typer
+import requests
 from typer import Context
 
 from smartdeck.utils.pagespec import parse_pagespec
@@ -20,6 +23,27 @@ from smartdeck.ingest.live import ingest_live
 app = typer.Typer(help="SmartDeck Maker CLI")
 sync_app = typer.Typer(help="Synchronize Anki decks ↔ known‑word vault")
 app.add_typer(sync_app, name="sync")
+
+
+def _translate(word: str, src: str, dest: str) -> str:
+    """
+    Translate a single word via the public Google Translate HTTP endpoint.
+    """
+    url = "https://translate.googleapis.com/translate_a/single"
+    params = {
+        "client": "gtx",
+        "sl": src,
+        "tl": dest,
+        "dt": "t",
+        "q": word,
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
+        return data[0][0][0]
+    except Exception:
+        return ""
 
 
 @sync_app.command("add")
@@ -51,25 +75,17 @@ def sync_remove(
     kind: str = typer.Argument(..., help="apkg, live, or book"),
     ident: str = typer.Argument(..., help="Path to .apkg, deck name, or book path"),
 ):
-    """
-    Remove a deck’s words from your vault (and delete orphaned words).
-    Supports kinds: 'apkg', 'live', and 'book'.
-    """
     vault = Vault()
     if kind == "apkg":
-        # offline .apkg imports are registered under kind="deck"
         vault.remove_source("deck", ident)
     elif kind == "live":
-        # live‑sync stub registers both a live and a deck source
         vault.remove_source("live", ident)
         vault.remove_source("deck", ident)
     elif kind == "book":
-        # GUI‑built decks use kind="book"
         vault.remove_source("book", ident)
     else:
         typer.echo("Error: kind must be 'apkg', 'live', or 'book'", err=True)
         raise typer.Exit(code=1)
-
     typer.echo(f"Removed {kind} '{ident}' and any orphaned words.")
 
 
@@ -89,7 +105,6 @@ def diff_cmd(
     tokens = tokenize_lemmas(texts, lang=lang)
     lemmas = [w["lemma"] for w in tokens]
     pct, unknowns, tier = Vault().coverage(lang, lemmas)
-
     typer.echo(f"Coverage: {pct:.1%}")
     typer.echo(f"Tier: {tier}")
     typer.echo(f"\nUnknown lemmas (top {top}):")
@@ -106,6 +121,11 @@ def build_cmd(
     lang: str = typer.Option("en", "--lang", "-l"),
     output: Path = typer.Option(Path("deck.apkg"), "--output", "-o"),
 ):
+    """
+    Build an Anki deck from the top‑N unknown words in a book,
+    fetching translations on the fly (English⇄German).
+    """
+    # 1) Extract & lemmatize
     texts = (
         extract_epub(source, pages, virtual_pages)
         if source.suffix.lower() == ".epub"
@@ -113,13 +133,44 @@ def build_cmd(
     )
     tokens = tokenize_lemmas(texts, lang=lang)
     lemmas = [w["lemma"] for w in tokens]
-    _, unknowns, _ = Vault().coverage(lang, lemmas)
 
+    # 2) Map lemma → POS
+    pos_map = {w["lemma"]: w["pos"] for w in tokens}
+
+    # 3) Coverage & select top unknowns
+    vault = Vault()
+    _, unknowns, _ = vault.coverage(lang, lemmas)
     top_lemmas = [l for l, _ in unknowns.most_common(top)]
-    occ = capture_excerpts(texts, top_lemmas)
-    Vault().add_words(lang, top_lemmas, kind="book", ident=str(source), occurrences=occ)
 
-    entries = [(l, "", occ[l][0], occ[l][1]) for l in top_lemmas]
+    # 4) Capture excerpts
+    occ = capture_excerpts(texts, top_lemmas)
+
+    # 5) Fetch translations
+    dest = "de" if lang.lower().startswith("en") else "en"
+    translations = {
+        lemma: _translate(lemma, src=lang, dest=dest)
+        for lemma in top_lemmas
+    }
+
+    # **DEBUG**: show what translations we got
+    print("DEBUG TRANSLATIONS:", translations)
+
+    # 6) Build entries: (lemma, translation, pos, excerpt, loc)
+    entries = [
+        (
+            lemma,
+            translations.get(lemma, ""),
+            pos_map.get(lemma, ""),
+            *occ.get(lemma, ("", "")),
+        )
+        for lemma in top_lemmas
+    ]
+
+    # **DEBUG**: show the final entries list
+    print("DEBUG ENTRIES:", entries)
+
+    # 7) Persist & write deck
+    vault.add_words(lang, top_lemmas, kind="book", ident=str(source), occurrences=occ)
     build_deck(source.name, entries, str(output))
     typer.echo(f"✅ Deck written to {output}")
 
