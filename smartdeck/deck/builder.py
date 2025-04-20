@@ -1,3 +1,5 @@
+# smartdeck/deck/builder.py
+
 from typing import Sequence, Union
 import genanki
 
@@ -16,32 +18,59 @@ _MODEL = genanki.Model(
         {"name": "Excerpt"},
         {"name": "SentenceTranslation"},
     ],
-    templates=[{
-        "name": "Card 1",
-        "qfmt": """
-            <div>{{Word}}</div>
-            <div>{{Excerpt}}</div>
-        """,
-        "afmt": """
-            {{FrontSide}}
-            <hr id="answer">
-            <div><strong>Translation:</strong> {{Translation}}</div>
-            <div><strong>IPA:</strong> {{IPA}}</div>
-            <div><strong>POS:</strong> {{POS}}</div>
-            <div><strong>Sentence Translation:</strong> {{SentenceTranslation}}</div>
-        """,
-    }],
+    templates=[
+        {
+            # forward card: show the word + excerpt, answer is translation etc.
+            "name": "Card 1 (→ Translation)",
+            "qfmt": """
+                <div style="text-align:center; font-size:24px;"><strong>{{Word}}</strong></div>
+                <div style="margin-top:1em; font-style:italic;">{{Excerpt}}</div>
+            """,
+            "afmt": """
+                {{FrontSide}}
+                <hr id="answer">
+                <div style="text-align:center;"><strong>Translation:</strong> {{Translation}}</div>
+                <div style="text-align:center;"><strong>IPA:</strong> {{IPA}}</div>
+                <div style="text-align:center;"><strong>POS:</strong> {{POS}}</div>
+                <div style="margin-top:1em;"><strong>Sentence Translation:</strong> {{SentenceTranslation}}</div>
+            """,
+        },
+        {
+            # reverse card: show the translation + sentence translation, answer is the original word
+            "name": "Card 2 (→ Word)",
+            "qfmt": """
+                <div style="text-align:center; font-size:24px;"><strong>{{Translation}}</strong></div>
+                <div style="margin-top:1em; font-style:italic;">{{SentenceTranslation}}</div>
+            """,
+            "afmt": """
+                {{FrontSide}}
+                <hr id="answer">
+                <div style="text-align:center;"><strong>Word:</strong> {{Word}}</div>
+                <div style="text-align:center;"><strong>IPA:</strong> {{IPA}}</div>
+                <div style="text-align:center;"><strong>POS:</strong> {{POS}}</div>
+                <div style="margin-top:1em;"><strong>Context:</strong> {{Excerpt}}</div>
+            """,
+        },
+    ],
     css="""
-        .h { background-color: #ffeb3b; }
-        body { font-family: Arial; line-height: 1.4; }
-        div { margin-bottom: 0.5em; }
+        /* center everything and improve contrast */
+        .card {
+          font-family: Arial;
+          text-align: center;
+          color: #333;
+          background-color: #f7f7f7;
+        }
+        .card div {
+          margin: 0.5em 0;
+        }
+        .h { /* you removed yellow highlighting entirely; if you want another color, adjust here */ }
     """,
 )
 
-# An entry may be:
-#  - 7‑tuple: (lemma, translation, ipa, pos, excerpt, sent_trans, loc)
-#  - 5‑tuple: (lemma, translation, pos, excerpt, loc)
-#  - 4‑tuple: (lemma, pos, excerpt, loc)
+# an entry may be:
+#  - 7‑tuple: (lemma, translation, ipa, pos, excerpt, sent_trans, location)
+#  - 5‑tuple: (lemma, translation, pos, excerpt, location)
+#  - 4‑tuple: (lemma, pos, excerpt, location)
 Entry = Union[
     tuple[str, str, str, str, str, str, str],
     tuple[str, str, str, str, str],
@@ -73,10 +102,8 @@ def build_deck(
         else:
             raise ValueError(f"Expected 4,5 or 7 elements, got {L}")
 
-        # highlight lemma in excerpt
-        highlighted = excerpt.replace(
-            lemma, f'<span class="h">{lemma}</span>'
-        )
+        # highlight lemma in excerpt (if you want no highlighting, just use excerpt directly)
+        highlighted = excerpt.replace(lemma, f"<strong>{lemma}</strong>")
         field_excerpt = f"{highlighted} <small>({loc})</small>"
 
         note = genanki.Note(
